@@ -10,6 +10,7 @@ from datetime import datetime
 # ========================================================
 st.set_page_config(page_title="ETF 정복(김도현)", page_icon="🦅", layout="wide")
 
+# 배포 및 로컬 겸용 경로 설정
 DB_PATH = "stocks.db" if os.path.exists("stocks.db") else os.path.join(os.path.expanduser("~"), "Desktop", "Stock_Data", "stocks.db")
 
 if 'current_page' not in st.session_state:
@@ -112,10 +113,12 @@ def main():
             search_kw = st.text_input("📝 키워드 검색", placeholder="이름/내용 등")
             st.write("💰 배당 횟수 (연)")
             max_val = int(df_raw['배당수_num'].max()) if not df_raw.empty else 12
-            n1, n2 = st.columns(2)
-            with n1:
+            
+            # [수정 완료] 변수명 통일 (n_col1, n_col2)
+            n_col1, n_col2 = st.columns(2)
+            with n_col1:
                 min_div = st.number_input("최소", min_value=0, max_value=max_val, value=0, step=1)
-            with n_col2: # 지난번 에러 났던 부분 수정
+            with n_col2:
                 max_div = st.number_input("최대", min_value=0, max_value=max_val, value=max_val, step=1)
         
         if st.button("🔄 검색 조건 초기화", use_container_width=True):
@@ -151,7 +154,6 @@ def main():
     # --- 4. 메인 표 (선택 기능 추가) ---
     if not selected_cols: selected_cols = ['티커']
 
-    # 🌟 [핵심] on_select="rerun" 추가 -> 행을 누르면 앱이 다시 실행되며 선택된 값을 가져옴
     event = st.data_editor(
         df_page[selected_cols], 
         column_config={
@@ -166,18 +168,16 @@ def main():
         hide_index=True, 
         key="main_editor",
         on_change=handle_editor_change,
-        selection_mode="single-row", # 한 번에 한 줄만 선택
-        on_select="rerun" # 선택 시 즉시 반응
+        selection_mode="single-row",
+        on_select="rerun"
     )
 
-    # --- 🌟 [신규 기능] 선택된 종목 상세 보기 (메모장) ---
-    # 사용자가 행을 선택했을 때만 아래 내용이 뜹니다.
+    # --- [상세 보기] 선택된 종목 메모장 ---
     if len(event.selection["rows"]) > 0:
         selected_idx = event.selection["rows"][0]
         selected_row = df_page.iloc[selected_idx]
         
         st.info(f"📌 **[{selected_row['티커']}] {selected_row['이름']} 상세 메모**")
-        # 텍스트 영역으로 크게 보여줌 (모바일에서 읽기 편함)
         st.text_area("내용 전체 보기", value=selected_row['내용'], height=150, disabled=True)
         st.caption("※ 표 안에서 내용을 수정하면 여기에도 반영됩니다.")
 
