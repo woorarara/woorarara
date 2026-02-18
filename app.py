@@ -9,15 +9,10 @@ from datetime import datetime
 # ========================================================
 st.set_page_config(page_title="ETF 정복(김도현)", page_icon="🦅", layout="wide")
 
-desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-BASE_FOLDER = os.path.join(desktop_path, "Stock_Data")
-DB_PATH = "stocks.db"
+# 배포용 경로 설정 (GitHub 환경 고려)
+DB_PATH = "stocks.db" if os.path.exists("stocks.db") else os.path.join(os.path.expanduser("~"), "Desktop", "Stock_Data", "stocks.db")
 
-# 폴더가 없으면 생성
-if not os.path.exists(BASE_FOLDER):
-    os.makedirs(BASE_FOLDER)
-
-# 페이지 및 세션 상태 초기화
+# 페이지 세션 상태 초기화
 if 'current_page' not in st.session_state:
     st.session_state.current_page = 1
 
@@ -56,9 +51,6 @@ def delete_ticker(ticker):
     conn.commit()
     conn.close()
 
-# ========================================================
-# [핵심] 자동 저장 핸들러
-# ========================================================
 def handle_editor_change():
     changes = st.session_state["main_editor"]["edited_rows"]
     if changes:
@@ -67,7 +59,7 @@ def handle_editor_change():
             ticker = df_page.iloc[row_idx]["티커"]
             for col_name, new_val in updated_cols.items():
                 update_db(ticker, col_name, new_val)
-        st.toast("✅ 수정사항이 DB에 자동 저장되었습니다.", icon="💾")
+        st.toast("✅ 자동 저장 완료!", icon="💾")
 
 # ========================================================
 # [메인 화면]
@@ -77,121 +69,117 @@ def main():
 
     df_raw = load_data()
     if df_raw.empty:
-        st.error("DB 파일을 찾을 수 없습니다. 경로를 확인해주세요.")
+        st.error("DB 파일을 찾을 수 없습니다.")
         return
 
-    # --- 사이드바 ---
+    # --- 사이드바: 검색 및 필터만 배치 ---
     with st.sidebar:
-        st.header("💾 데이터 백업")
-        # 🌟 엑셀 백업 버튼 추가
-        if st.button("📥 현재 DB를 엑셀로 백업", use_container_width=True):
-            try:
-                now = datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup_filename = f"DB_Backup_{now}.xlsx"
-                backup_path = os.path.join(BASE_FOLDER, backup_filename)
-                
-                # 전체 데이터를 엑셀로 저장
-                df_raw.drop(columns=['배당수_num'], errors='ignore').to_excel(backup_path, index=False)
-                st.success(f"✅ 백업 완료!\n{backup_filename}")
-                os.startfile(BASE_FOLDER) # 폴더 바로 열어주기
-            except Exception as e:
-                st.error(f"❌ 백업 실패: {e}")
-
-        st.markdown("---")
-        st.header("➕ 종목 관리")
-        with st.expander("신규 종목 추가"):
-            new_sym = st.text_input("티커 추가").upper()
-            new_name = st.text_input("종목명")
-            new_country = st.selectbox("국가 선택", ["미국", "한국"])
-            new_mgr = st.text_input("운용사")
-            if st.button("DB에 추가"):
-                if new_sym:
-                    add_ticker(new_sym, new_name, new_country, new_mgr)
-                    st.success(f"{new_sym} 추가 완료!")
-                    st.rerun()
-
-        with st.expander("종목 삭제"):
-            del_sym = st.text_input("삭제할 티커").upper()
-            if st.button("데이터 영구 삭제"):
-                delete_ticker(del_sym)
-                st.warning(f"{del_sym} 삭제됨")
-                st.rerun()
-
-        st.markdown("---")
         st.header("🔍 정밀 검색")
         country_options = ["전체", "미국", "한국"]
         selected_countries = st.multiselect("국가 필터", options=country_options, default=["전체"])
-        search_ticker = st.text_input("🎯 티커 검색", placeholder="티커 입력").strip().upper()
-        search_kw = st.text_input("📝 내용/이름/운용사 검색", placeholder="2글자 이상 입력")
+        
+        search_ticker = st.text_input("🎯 티커 검색", placeholder="예: TSLA, 005930").strip().upper()
+        search_kw = st.text_input("📝 키워드 검색", placeholder="이름/운용사/내용")
         
         max_div = int(df_raw['배당수_num'].max())
         div_range = st.slider("배당 횟수 필터 (연)", 0, max_div, (0, max_div))
         
-        if st.button("검색 초기화"):
+        if st.button("🔄 검색 초기화", use_container_width=True):
             st.session_state.current_page = 1
             st.rerun()
 
-    # --- 필터링 로직 ---
+    # --- 데이터 필터링 로직 ---
     df = df_raw.copy()
     if "전체" not in selected_countries and selected_countries:
         df = df[df['국가'].isin(selected_countries)]
     if search_ticker:
-        if len(search_ticker) <= 2:
-            df = df[df['티커'].str.startswith(search_ticker, na=False)]
-        else:
-            df = df[df['티커'].str.contains(search_ticker, case=False, na=False)]
-    if search_kw and len(search_kw.strip()) >= 2:
-        kw = search_kw.strip().upper()
+        df = df[df['티커'].str.contains(search_ticker, case=False, na=False)]
+    if search_kw:
+        kw = search_kw.upper()
         mask = (df['이름'].str.contains(kw, case=False, na=False)) | \
                (df['운용사'].str.contains(kw, case=False, na=False)) | \
                (df['내용'].str.contains(kw, case=False, na=False))
         df = df[mask]
     df = df[(df['배당수_num'] >= div_range[0]) & (df['배당수_num'] <= div_range[1])]
 
-    # --- 페이징 및 출력 ---
-    items_per_page = 100
+    # --- 페이징 처리 ---
+    items_per_page = 50 # 모바일 부하를 줄이기 위해 페이지당 개수를 50개로 하향 조정
     total_items = len(df)
     total_pages = max(1, (total_items // items_per_page) + (1 if total_items % items_per_page > 0 else 0))
+    
     if st.session_state.current_page > total_pages:
         st.session_state.current_page = 1
+
     start_idx = (st.session_state.current_page - 1) * items_per_page
     df_page = df.iloc[start_idx : start_idx + items_per_page].reset_index(drop=True)
     st.session_state["df_page_static"] = df_page
 
-    st.write(f"📊 조회된 종목: **{total_items}**개 (현재 {st.session_state.current_page} / {total_pages} 페이지)")
+    st.write(f"📊 종목: **{total_items}**개 (현재 {st.session_state.current_page}/{total_pages}P)")
 
-    # --- 메인 에디터 (자동 저장) ---
-    display_cols = ['티커', '이름', '국가', '운용사', '배당수', '내용']
+    # --- 메인 에디터 ---
     st.data_editor(
-        df_page[display_cols],
+        df_page[['티커', '이름', '국가', '배당수', '내용']], # 모바일 화면을 고려해 컬럼 축소
         column_config={
             "티커": st.column_config.TextColumn("티커", disabled=True),
-            "이름": st.column_config.TextColumn("종목명", disabled=True, width="medium"),
-            "내용": st.column_config.TextColumn("투자포인트/내용", width="large"),
+            "이름": st.column_config.TextColumn("종목명", disabled=True, width="small"),
+            "내용": st.column_config.TextColumn("내용", width="medium"),
         },
         use_container_width=True, hide_index=True, key="main_editor",
         on_change=handle_editor_change
     )
 
+    # --- 하단 페이지 이동 버튼 (모바일 최적화) ---
+    # 버튼이 아래로 밀리지 않도록 개수를 줄임
     st.markdown("---")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col1:
+        if st.session_state.current_page > 1:
+            if st.button("⬅️ 이전", use_container_width=True):
+                st.session_state.current_page -= 1
+                st.rerun()
+    
+    with col2:
+        # 현재 페이지 주변 3개만 표시하여 밀림 방지
+        page_range = range(max(1, st.session_state.current_page - 1), min(total_pages, st.session_state.current_page + 1) + 1)
+        btn_cols = st.columns(len(page_range))
+        for idx, p in enumerate(page_range):
+            if btn_cols[idx].button(f"{p}", type="primary" if p == st.session_state.current_page else "secondary", use_container_width=True):
+                st.session_state.current_page = p
+                st.rerun()
 
-    # --- 하단 페이지 이동 버튼 ---
-    p_cols = st.columns(min(total_pages + 2, 15))
-    if st.session_state.current_page > 1:
-        if p_cols[0].button("이전"):
-            st.session_state.current_page -= 1
-            st.rerun()
-    start_p = max(1, st.session_state.current_page - 4)
-    end_p = min(total_pages, start_p + 9)
-    for i, p in enumerate(range(start_p, end_p + 1)):
-        if p_cols[i+1].button(f"{p}", type="primary" if p == st.session_state.current_page else "secondary"):
-            st.session_state.current_page = p
-            st.rerun()
-    if st.session_state.current_page < total_pages:
-        if p_cols[-1].button("다음"):
-            st.session_state.current_page += 1
-            st.rerun()
+    with col3:
+        if st.session_state.current_page < total_pages:
+            if st.button("다음 ➡️", use_container_width=True):
+                st.session_state.current_page += 1
+                st.rerun()
+
+    # --- 하단 관리 메뉴 (모바일 배려: 사이드바 대신 메인 하단으로) ---
+    st.markdown("---")
+    st.subheader("🛠️ 관리 및 백업")
+    m_col1, m_col2 = st.columns(2)
+    
+    with m_col1:
+        with st.expander("➕ 종목 추가"):
+            new_sym = st.text_input("추가 티커").upper()
+            new_name = st.text_input("추가 이름")
+            new_country = st.selectbox("추가 국가", ["미국", "한국"])
+            if st.button("DB 추가"):
+                if new_sym:
+                    add_ticker(new_sym, new_name, new_country, "")
+                    st.rerun()
+                    
+    with m_col2:
+        with st.expander("🗑️ 종목 삭제"):
+            del_sym = st.text_input("삭제 티커").upper()
+            if st.button("DB 삭제", type="primary"):
+                delete_ticker(del_sym)
+                st.rerun()
+
+    if st.button("📥 엑셀 백업 파일 생성", use_container_width=True):
+        now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        df_raw.to_excel(f"DB_Backup_{now}.xlsx", index=False)
+        st.success("바탕화면 혹은 서버 폴더에 백업 되었습니다.")
 
 if __name__ == "__main__":
-
     main()
