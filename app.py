@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import os
-import io # 파일 폰 다운로드용 기능
+import io
 from datetime import datetime
 
 # ========================================================
@@ -10,7 +10,7 @@ from datetime import datetime
 # ========================================================
 st.set_page_config(page_title="ETF 정복(김도현)", page_icon="🦅", layout="wide")
 
-# 배포(GitHub) 및 로컬(내컴퓨터) 경로 자동 설정
+# 배포 및 로컬 겸용 경로 설정
 DB_PATH = "stocks.db" if os.path.exists("stocks.db") else os.path.join(os.path.expanduser("~"), "Desktop", "Stock_Data", "stocks.db")
 
 if 'current_page' not in st.session_state:
@@ -30,8 +30,7 @@ def load_data():
     
     df['배당수_num'] = pd.to_numeric(df['배당수'], errors='coerce').fillna(0)
     
-    # 🌟 [핵심] 링크 URL 컬럼 생성 (한국->네이버, 미국->야후)
-    # 모바일 환경에 맞춰 네이버는 모바일 페이지(m.stock)로 연결합니다.
+    # 🌟 [핵심] 모든 종목에 대해 자동으로 링크 생성 (추가된 종목도 자동 적용됨)
     df["url"] = df.apply(
         lambda row: f"https://finance.yahoo.com/quote/{row['티커']}" if row['국가'] == "미국" 
         else f"https://m.stock.naver.com/item/main.nhn?code={row['티커']}", 
@@ -88,7 +87,7 @@ def main():
         st.error("DB 파일을 찾을 수 없습니다.")
         return
 
-    # --- 1. 상단 검색창 (접이식) ---
+    # --- 1. 상단 검색창 ---
     with st.expander("🔍 종목 검색 및 필터 (클릭해서 열기/닫기)"):
         c1, c2 = st.columns(2)
         with c1:
@@ -99,13 +98,12 @@ def main():
         with c2:
             search_kw = st.text_input("📝 키워드 검색", placeholder="이름/내용 등")
             
-            # [모바일 최적화] 슬라이더 대신 숫자 입력기 사용
             st.write("💰 배당 횟수 (연)")
             max_val = int(df_raw['배당수_num'].max()) if not df_raw.empty else 12
             n1, n2 = st.columns(2)
             with n1:
                 min_div = st.number_input("최소", min_value=0, max_value=max_val, value=0, step=1)
-            with n2:
+            with n_col2:
                 max_div = st.number_input("최대", min_value=0, max_value=max_val, value=max_val, step=1)
         
         if st.button("🔄 검색 조건 초기화", use_container_width=True):
@@ -126,7 +124,7 @@ def main():
         df = df[mask]
     df = df[(df['배당수_num'] >= min_div) & (df['배당수_num'] <= max_div)]
 
-    # --- 3. 페이징 (모바일 30개) ---
+    # --- 3. 페이징 ---
     items_per_page = 30 
     total_items = len(df)
     total_pages = max(1, (total_items // items_per_page) + (1 if total_items % items_per_page > 0 else 0))
@@ -138,17 +136,19 @@ def main():
 
     st.write(f"📊 조회된 종목: **{total_items}**개 (현재 {st.session_state.current_page} / {total_pages} 페이지)")
 
-    # --- 4. 메인 표 (링크 기능 탑재) ---
-    # 사용자에게는 'url' 컬럼을 '티커'처럼 보여줍니다.
+    # --- 4. 메인 표 (티커 + 링크 아이콘) ---
+    # 티커 옆에 '정보' 컬럼을 추가해 아이콘(🔗)을 보여줍니다.
     st.data_editor(
-        df_page[['url', '이름', '국가', '배당수', '내용']], 
+        df_page[['티커', 'url', '이름', '국가', '배당수', '내용']], 
         column_config={
+            "티커": st.column_config.TextColumn("티커", disabled=True, width="small"),
             "url": st.column_config.LinkColumn(
-                "티커 (클릭)", 
+                "정보", # 컬럼 제목
                 help="클릭하면 네이버/야후 증권으로 이동합니다.",
                 validate="^https://.*",
                 max_chars=100,
-                display_text="상세보기" # 🔗 깔끔하게 '상세보기' 버튼처럼 표시
+                display_text="🔗", # 🔗 아이콘으로 표시
+                width="small"
             ),
             "이름": st.column_config.TextColumn("종목명", disabled=True, width="small"),
             "국가": st.column_config.TextColumn("국가", width="small"),
@@ -164,6 +164,7 @@ def main():
     # --- 5. 하단 페이지 버튼 ---
     st.markdown("---")
     col_prev, col_num, col_next = st.columns([1, 3, 1])
+    
     with col_prev:
         if st.session_state.current_page > 1:
             if st.button("◀ 이전", use_container_width=True):
@@ -198,7 +199,7 @@ def main():
                 if st.button("DB에 추가하기"):
                     if new_sym: 
                         add_ticker(new_sym, new_name, new_country, "")
-                        st.success(f"{new_sym} 추가됨!")
+                        st.success(f"{new_sym} 추가됨! (자동으로 링크도 생성됩니다)")
                         st.rerun()
             with c_del:
                 st.caption("종목 삭제")
@@ -211,10 +212,9 @@ def main():
 
         with tab2:
             st.caption("현재 데이터를 엑셀 파일로 내 폰/PC에 다운로드합니다.")
-            
-            # [모바일 다운로드 해결]
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                # 엑셀로 받을 때는 'url' 컬럼은 굳이 필요 없으므로 빼고 저장
                 df_raw.drop(columns=['url', '배당수_num'], errors='ignore').to_excel(writer, index=False)
                 
             st.download_button(
