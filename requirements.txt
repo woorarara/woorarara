@@ -1,2 +1,5 @@
 streamlit
 pandas
+openpyxl
+yfinance
+finance-datareader
