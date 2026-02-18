@@ -10,7 +10,6 @@ from datetime import datetime
 # ========================================================
 st.set_page_config(page_title="ETF 정복(김도현)", page_icon="🦅", layout="wide")
 
-# 배포 및 로컬 겸용 경로 설정
 DB_PATH = "stocks.db" if os.path.exists("stocks.db") else os.path.join(os.path.expanduser("~"), "Desktop", "Stock_Data", "stocks.db")
 
 if 'current_page' not in st.session_state:
@@ -113,12 +112,10 @@ def main():
             search_kw = st.text_input("📝 키워드 검색", placeholder="이름/내용 등")
             st.write("💰 배당 횟수 (연)")
             max_val = int(df_raw['배당수_num'].max()) if not df_raw.empty else 12
-            
-            # [수정 완료] 변수명 통일 (n_col1, n_col2)
-            n_col1, n_col2 = st.columns(2)
-            with n_col1:
+            n1, n2 = st.columns(2)
+            with n1:
                 min_div = st.number_input("최소", min_value=0, max_value=max_val, value=0, step=1)
-            with n_col2:
+            with n2:
                 max_div = st.number_input("최대", min_value=0, max_value=max_val, value=max_val, step=1)
         
         if st.button("🔄 검색 조건 초기화", use_container_width=True):
@@ -151,10 +148,26 @@ def main():
 
     st.write(f"📊 조회된 종목: **{total_items}**개 (현재 {st.session_state.current_page} / {total_pages} 페이지)")
 
-    # --- 4. 메인 표 (선택 기능 추가) ---
-    if not selected_cols: selected_cols = ['티커']
+    # --- 🌟 [대체 기능] 모바일용 상세 보기 (선택 상자) ---
+    # 표를 클릭하는 대신, 여기서 종목을 고르면 내용이 보입니다. (구버전 호환성 100%)
+    
+    # 1. 상세 내용을 볼 종목 선택
+    selected_ticker_for_view = st.selectbox(
+        "📌 상세 내용을 확인할 종목을 선택하세요:", 
+        options=["(선택안함)"] + df_page['티커'].tolist()
+    )
 
-    event = st.data_editor(
+    # 2. 선택하면 내용 보여주기
+    if selected_ticker_for_view != "(선택안함)":
+        row_data = df_page[df_page['티커'] == selected_ticker_for_view].iloc[0]
+        st.info(f"📝 **[{row_data['티커']}] {row_data['이름']}** 상세 메모")
+        st.text_area("내용 (수정은 아래 표에서)", value=row_data['내용'], height=150, disabled=True)
+
+    # --- 4. 메인 표 ---
+    if not selected_cols: selected_cols = ['티커']
+    
+    # [수정] selection_mode 같은 최신 기능 제거 -> 에러 원인 차단
+    st.data_editor(
         df_page[selected_cols], 
         column_config={
             "티커": st.column_config.TextColumn("티커", disabled=True, width="small"),
@@ -167,19 +180,8 @@ def main():
         use_container_width=True, 
         hide_index=True, 
         key="main_editor",
-        on_change=handle_editor_change,
-        selection_mode="single-row",
-        on_select="rerun"
+        on_change=handle_editor_change
     )
-
-    # --- [상세 보기] 선택된 종목 메모장 ---
-    if len(event.selection["rows"]) > 0:
-        selected_idx = event.selection["rows"][0]
-        selected_row = df_page.iloc[selected_idx]
-        
-        st.info(f"📌 **[{selected_row['티커']}] {selected_row['이름']} 상세 메모**")
-        st.text_area("내용 전체 보기", value=selected_row['내용'], height=150, disabled=True)
-        st.caption("※ 표 안에서 내용을 수정하면 여기에도 반영됩니다.")
 
     # --- 5. 페이지 버튼 ---
     st.markdown("---")
