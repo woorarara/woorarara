@@ -11,7 +11,7 @@ st.set_page_config(page_title="ETF 정복(김도현)", page_icon="🦅", layout=
 
 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
 BASE_FOLDER = os.path.join(desktop_path, "Stock_Data")
-DB_PATH = os.path.join(BASE_FOLDER, "stocks.db")
+DB_PATH = "stocks.db"
 
 # 폴더가 없으면 생성
 if not os.path.exists(BASE_FOLDER):
@@ -193,4 +193,5 @@ def main():
             st.rerun()
 
 if __name__ == "__main__":
+
     main()
