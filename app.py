@@ -10,7 +10,6 @@ from datetime import datetime
 # ========================================================
 st.set_page_config(page_title="ETF 정복(김도현)", page_icon="🦅", layout="wide")
 
-# 배포 및 로컬 겸용 경로 설정
 DB_PATH = "stocks.db" if os.path.exists("stocks.db") else os.path.join(os.path.expanduser("~"), "Desktop", "Stock_Data", "stocks.db")
 
 if 'current_page' not in st.session_state:
@@ -30,7 +29,7 @@ def load_data():
     
     df['배당수_num'] = pd.to_numeric(df['배당수'], errors='coerce').fillna(0)
     
-    # 링크 생성 (한국:네이버, 미국:야후)
+    # 링크 생성
     df["url"] = df.apply(
         lambda row: f"https://finance.yahoo.com/quote/{row['티커']}" if row['국가'] == "미국" 
         else f"https://m.stock.naver.com/item/main.nhn?code={row['티커']}", 
@@ -51,11 +50,8 @@ def add_ticker(ticker, name, country, manager):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     
-    # 중복 체크
     cur.execute("SELECT count(*) FROM etf_data WHERE 티커 = ?", (ticker,))
-    count = cur.fetchone()[0]
-    
-    if count > 0:
+    if cur.fetchone()[0] > 0:
         conn.close()
         return False, f"❌ '{ticker}'는 이미 DB에 있습니다!"
     
@@ -100,7 +96,25 @@ def main():
         return
 
     # --- 1. 상단 검색창 ---
-    with st.expander("🔍 종목 검색 및 필터 (클릭해서 열기/닫기)"):
+    with st.expander("🔍 종목 검색 및 화면 설정 (클릭해서 열기/닫기)"):
+        # 🌟 [추가됨] 화면에 보여줄 컬럼 선택 기능 (숨기기 유지용)
+        st.write("👁️ **표시할 항목 선택 (체크 해제하면 숨겨집니다)**")
+        
+        # 전체 가능한 컬럼 목록
+        all_columns = ['티커', 'url', '이름', '국가', '운용사', '배당수', '내용']
+        # 기본적으로 보여줄 컬럼들
+        default_columns = ['티커', 'url', '이름', '국가', '배당수', '내용']
+        
+        # 멀티 셀렉트로 사용자 선택 받기
+        selected_cols = st.multiselect(
+            "보여줄 컬럼을 선택하세요:",
+            options=all_columns,
+            default=default_columns,
+            label_visibility="collapsed"
+        )
+        
+        st.markdown("---") # 구분선
+
         c1, c2 = st.columns(2)
         with c1:
             country_options = ["전체", "미국", "한국"]
@@ -113,7 +127,6 @@ def main():
             st.write("💰 배당 횟수 (연)")
             max_val = int(df_raw['배당수_num'].max()) if not df_raw.empty else 12
             
-            # [수정된 부분] 변수명을 n_col1, n_col2로 통일하여 에러 해결
             n_col1, n_col2 = st.columns(2)
             with n_col1:
                 min_div = st.number_input("최소", min_value=0, max_value=max_val, value=0, step=1)
@@ -150,18 +163,26 @@ def main():
 
     st.write(f"📊 조회된 종목: **{total_items}**개 (현재 {st.session_state.current_page} / {total_pages} 페이지)")
 
-    # --- 4. 메인 표 ---
+    # --- 4. 메인 표 (사용자 선택 컬럼만 표시) ---
+    # 사용자가 선택한 컬럼이 하나도 없으면 경고 방지용으로 티커는 보여줌
+    if not selected_cols:
+        selected_cols = ['티커']
+
     st.data_editor(
-        df_page[['티커', 'url', '이름', '국가', '배당수', '내용']], 
+        df_page[selected_cols],  # 🌟 여기서 선택한 컬럼만 잘라서 보여줍니다!
         column_config={
             "티커": st.column_config.TextColumn("티커", disabled=True, width="small"),
-            "url": st.column_config.LinkColumn("정보", help="클릭 시 이동", validate="^https://.*", max_chars=100, display_text="🔗", width="small"),
+            "url": st.column_config.LinkColumn("정보", help="이동", validate="^https://.*", max_chars=100, display_text="🔗", width="small"),
             "이름": st.column_config.TextColumn("종목명", disabled=True, width="small"),
             "국가": st.column_config.TextColumn("국가", width="small"),
+            "운용사": st.column_config.TextColumn("운용사", width="small"),
             "배당수": st.column_config.TextColumn("배당", width="small"),
             "내용": st.column_config.TextColumn("메모/내용", width="large"),
         },
-        use_container_width=True, hide_index=True, key="main_editor", on_change=handle_editor_change
+        use_container_width=True, 
+        hide_index=True, 
+        key="main_editor",
+        on_change=handle_editor_change
     )
 
     # --- 5. 페이지 버튼 ---
@@ -194,7 +215,7 @@ def main():
         with tab1:
             c_add, c_del = st.columns(2)
             with c_add:
-                st.caption("신규 종목 추가")
+                st.caption("신규 종목 추가 (중복 시 빨간색 경고)")
                 new_sym = st.text_input("티커 입력").upper()
                 new_name = st.text_input("종목명 입력")
                 new_country = st.selectbox("국가", ["미국", "한국"])
@@ -206,7 +227,7 @@ def main():
                             st.success(msg)
                             st.rerun()
                         else:
-                            st.error(msg) # 중복 시 에러 표시
+                            st.error(msg)
 
             with c_del:
                 st.caption("종목 삭제")
