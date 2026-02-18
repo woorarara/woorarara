@@ -21,10 +21,8 @@ if 'current_page' not in st.session_state:
 def load_data():
     if not os.path.exists(DB_PATH): return pd.DataFrame()
     conn = sqlite3.connect(DB_PATH)
-    # stocks.db 내의 테이블명이 etf_data인지 확인 필요 (업로드 파일 기준)
     df = pd.read_sql("SELECT * FROM etf_data", conn)
     conn.close()
-    # 컬럼명 한글/영어 확인 후 처리 (업로드된 db 구조 반영)
     df['배당수_num'] = pd.to_numeric(df['배당수'], errors='coerce').fillna(0)
     return df
 
@@ -73,18 +71,27 @@ def main():
         st.error("DB 파일을 찾을 수 없습니다.")
         return
 
-    # --- 🌟 [변경] 정밀 검색창을 접이식(Expander)으로 메인 상단에 배치 ---
-    # 사이드바를 비워두면 모바일에서 표가 화면 가로를 100% 사용합니다.
+    # --- 🌟 정밀 검색창 (Expander) ---
     with st.expander("🔍 정밀 검색창 열기/닫기"):
         c1, c2 = st.columns(2)
         with c1:
             country_options = ["전체", "미국", "한국"]
             selected_countries = st.multiselect("국가 필터", options=country_options, default=["전체"])
-            search_ticker = st.text_input("🎯 티커 검색", placeholder="예: TSLA, 005930").strip().upper()
+            search_ticker = st.text_input("🎯 티커 검색", placeholder="예: TSLA").strip().upper()
+        
         with c2:
             search_kw = st.text_input("📝 키워드 검색", placeholder="이름/운용사/내용")
-            max_div = int(df_raw['배당수_num'].max())
-            div_range = st.slider("배당 횟수 필터 (연)", 0, max_div, (0, max_div))
+            
+            # 🌟 [수정] 모바일 친화적 배당 필터 (숫자 입력 방식)
+            st.write("💰 배당 횟수 필터 (연)")
+            max_val = int(df_raw['배당수_num'].max())
+            
+            # 가로로 배치 (모바일에서도 버튼이 잘 보임)
+            n1, n2 = st.columns(2)
+            with n1:
+                min_div = st.number_input("최소", min_value=0, max_value=max_val, value=0, step=1)
+            with n2:
+                max_div = st.number_input("최대", min_value=0, max_value=max_val, value=max_val, step=1)
         
         if st.button("🔄 검색 조건 초기화", use_container_width=True):
             st.session_state.current_page = 1
@@ -102,10 +109,12 @@ def main():
                (df['운용사'].str.contains(kw, case=False, na=False)) | \
                (df['내용'].str.contains(kw, case=False, na=False))
         df = df[mask]
-    df = df[(df['배당수_num'] >= div_range[0]) & (df['배당수_num'] <= div_range[1])]
+    
+    # 🌟 [수정] 입력된 최소/최대 값으로 필터링 적용
+    df = df[(df['배당수_num'] >= min_div) & (df['배당수_num'] <= max_div)]
 
     # --- 페이징 처리 ---
-    items_per_page = 30 # 모바일 가독성을 위해 한 페이지당 30개로 조정
+    items_per_page = 30 
     total_items = len(df)
     total_pages = max(1, (total_items // items_per_page) + (1 if total_items % items_per_page > 0 else 0))
     if st.session_state.current_page > total_pages: st.session_state.current_page = 1
@@ -116,7 +125,7 @@ def main():
 
     st.write(f"📊 **{total_items}**개 종목 (현재 {st.session_state.current_page}/{total_pages}P)")
 
-    # --- 메인 에디터 (글자 크기 확보를 위해 사이드바 제거 상태에서 출력) ---
+    # --- 메인 에디터 ---
     st.data_editor(
         df_page[['티커', '이름', '국가', '배당수', '내용']], 
         column_config={
@@ -139,7 +148,6 @@ def main():
                 st.session_state.current_page -= 1
                 st.rerun()
     with col_num:
-        # 모바일용: 현재 페이지 기준 앞뒤 1개씩 총 3개만 표시
         p_start = max(1, st.session_state.current_page - 1)
         p_end = min(total_pages, p_start + 2)
         p_range = range(p_start, p_end + 1)
@@ -154,7 +162,7 @@ def main():
                 st.session_state.current_page += 1
                 st.rerun()
 
-    # --- 관리 기능 하단 배치 ---
+    # --- 관리 기능 ---
     st.markdown("---")
     with st.expander("🛠️ 데이터 관리 (추가/삭제/백업)"):
         c_add, c_del = st.columns(2)
