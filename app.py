@@ -30,7 +30,7 @@ def load_data():
     
     df['배당수_num'] = pd.to_numeric(df['배당수'], errors='coerce').fillna(0)
     
-    # 🌟 [핵심] 모든 종목에 대해 자동으로 링크 생성 (추가된 종목도 자동 적용됨)
+    # 링크 생성 (한국:네이버, 미국:야후)
     df["url"] = df.apply(
         lambda row: f"https://finance.yahoo.com/quote/{row['티커']}" if row['국가'] == "미국" 
         else f"https://m.stock.naver.com/item/main.nhn?code={row['티커']}", 
@@ -50,12 +50,24 @@ def update_db(ticker, field, new_value):
 def add_ticker(ticker, name, country, manager):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+    
+    # 중복 체크
+    cur.execute("SELECT count(*) FROM etf_data WHERE 티커 = ?", (ticker,))
+    count = cur.fetchone()[0]
+    
+    if count > 0:
+        conn.close()
+        return False, f"❌ '{ticker}'는 이미 DB에 있습니다!"
+    
     try:
         cur.execute("INSERT INTO etf_data (티커, 이름, 국가, 운용사, 내용, 배당수) VALUES (?, ?, ?, ?, '', '0')",
                     (ticker, name, country, manager))
         conn.commit()
-    except: pass
-    conn.close()
+        conn.close()
+        return True, f"✅ {ticker} 추가 완료!"
+    except Exception as e:
+        conn.close()
+        return False, f"오류: {e}"
 
 def delete_ticker(ticker):
     conn = sqlite3.connect(DB_PATH)
@@ -100,8 +112,10 @@ def main():
             
             st.write("💰 배당 횟수 (연)")
             max_val = int(df_raw['배당수_num'].max()) if not df_raw.empty else 12
-            n1, n2 = st.columns(2)
-            with n1:
+            
+            # [수정된 부분] 변수명을 n_col1, n_col2로 통일하여 에러 해결
+            n_col1, n_col2 = st.columns(2)
+            with n_col1:
                 min_div = st.number_input("최소", min_value=0, max_value=max_val, value=0, step=1)
             with n_col2:
                 max_div = st.number_input("최대", min_value=0, max_value=max_val, value=max_val, step=1)
@@ -136,35 +150,23 @@ def main():
 
     st.write(f"📊 조회된 종목: **{total_items}**개 (현재 {st.session_state.current_page} / {total_pages} 페이지)")
 
-    # --- 4. 메인 표 (티커 + 링크 아이콘) ---
-    # 티커 옆에 '정보' 컬럼을 추가해 아이콘(🔗)을 보여줍니다.
+    # --- 4. 메인 표 ---
     st.data_editor(
         df_page[['티커', 'url', '이름', '국가', '배당수', '내용']], 
         column_config={
             "티커": st.column_config.TextColumn("티커", disabled=True, width="small"),
-            "url": st.column_config.LinkColumn(
-                "정보", # 컬럼 제목
-                help="클릭하면 네이버/야후 증권으로 이동합니다.",
-                validate="^https://.*",
-                max_chars=100,
-                display_text="🔗", # 🔗 아이콘으로 표시
-                width="small"
-            ),
+            "url": st.column_config.LinkColumn("정보", help="클릭 시 이동", validate="^https://.*", max_chars=100, display_text="🔗", width="small"),
             "이름": st.column_config.TextColumn("종목명", disabled=True, width="small"),
             "국가": st.column_config.TextColumn("국가", width="small"),
             "배당수": st.column_config.TextColumn("배당", width="small"),
             "내용": st.column_config.TextColumn("메모/내용", width="large"),
         },
-        use_container_width=True, 
-        hide_index=True, 
-        key="main_editor",
-        on_change=handle_editor_change
+        use_container_width=True, hide_index=True, key="main_editor", on_change=handle_editor_change
     )
 
-    # --- 5. 하단 페이지 버튼 ---
+    # --- 5. 페이지 버튼 ---
     st.markdown("---")
     col_prev, col_num, col_next = st.columns([1, 3, 1])
-    
     with col_prev:
         if st.session_state.current_page > 1:
             if st.button("◀ 이전", use_container_width=True):
@@ -196,11 +198,16 @@ def main():
                 new_sym = st.text_input("티커 입력").upper()
                 new_name = st.text_input("종목명 입력")
                 new_country = st.selectbox("국가", ["미국", "한국"])
+                
                 if st.button("DB에 추가하기"):
                     if new_sym: 
-                        add_ticker(new_sym, new_name, new_country, "")
-                        st.success(f"{new_sym} 추가됨! (자동으로 링크도 생성됩니다)")
-                        st.rerun()
+                        success, msg = add_ticker(new_sym, new_name, new_country, "")
+                        if success:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg) # 중복 시 에러 표시
+
             with c_del:
                 st.caption("종목 삭제")
                 del_sym = st.text_input("삭제할 티커").upper()
@@ -211,12 +218,10 @@ def main():
                         st.rerun()
 
         with tab2:
-            st.caption("현재 데이터를 엑셀 파일로 내 폰/PC에 다운로드합니다.")
+            st.caption("데이터 엑셀 다운로드")
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                # 엑셀로 받을 때는 'url' 컬럼은 굳이 필요 없으므로 빼고 저장
                 df_raw.drop(columns=['url', '배당수_num'], errors='ignore').to_excel(writer, index=False)
-                
             st.download_button(
                 label="📥 엑셀 파일 다운로드 (클릭)",
                 data=buffer.getvalue(),
