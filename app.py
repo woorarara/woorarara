@@ -49,7 +49,6 @@ def update_db(ticker, field, new_value):
 def add_ticker(ticker, name, country, manager):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    
     cur.execute("SELECT count(*) FROM etf_data WHERE 티커 = ?", (ticker,))
     if cur.fetchone()[0] > 0:
         conn.close()
@@ -82,7 +81,7 @@ def handle_editor_change():
             ticker = df_page.iloc[row_idx]["티커"]
             for col_name, new_val in updated_cols.items():
                 update_db(ticker, col_name, new_val)
-        st.toast("✅ 수정 내용 저장 완료!", icon="💾")
+        st.toast("✅ 저장 완료!", icon="💾")
 
 # ========================================================
 # [메인 화면]
@@ -97,24 +96,12 @@ def main():
 
     # --- 1. 상단 검색창 ---
     with st.expander("🔍 종목 검색 및 화면 설정 (클릭해서 열기/닫기)"):
-        # 🌟 [추가됨] 화면에 보여줄 컬럼 선택 기능 (숨기기 유지용)
         st.write("👁️ **표시할 항목 선택 (체크 해제하면 숨겨집니다)**")
-        
-        # 전체 가능한 컬럼 목록
         all_columns = ['티커', 'url', '이름', '국가', '운용사', '배당수', '내용']
-        # 기본적으로 보여줄 컬럼들
         default_columns = ['티커', 'url', '이름', '국가', '배당수', '내용']
+        selected_cols = st.multiselect("컬럼 선택", options=all_columns, default=default_columns, label_visibility="collapsed")
         
-        # 멀티 셀렉트로 사용자 선택 받기
-        selected_cols = st.multiselect(
-            "보여줄 컬럼을 선택하세요:",
-            options=all_columns,
-            default=default_columns,
-            label_visibility="collapsed"
-        )
-        
-        st.markdown("---") # 구분선
-
+        st.markdown("---")
         c1, c2 = st.columns(2)
         with c1:
             country_options = ["전체", "미국", "한국"]
@@ -123,14 +110,12 @@ def main():
         
         with c2:
             search_kw = st.text_input("📝 키워드 검색", placeholder="이름/내용 등")
-            
             st.write("💰 배당 횟수 (연)")
             max_val = int(df_raw['배당수_num'].max()) if not df_raw.empty else 12
-            
-            n_col1, n_col2 = st.columns(2)
-            with n_col1:
+            n1, n2 = st.columns(2)
+            with n1:
                 min_div = st.number_input("최소", min_value=0, max_value=max_val, value=0, step=1)
-            with n_col2:
+            with n_col2: # 지난번 에러 났던 부분 수정
                 max_div = st.number_input("최대", min_value=0, max_value=max_val, value=max_val, step=1)
         
         if st.button("🔄 검색 조건 초기화", use_container_width=True):
@@ -163,27 +148,38 @@ def main():
 
     st.write(f"📊 조회된 종목: **{total_items}**개 (현재 {st.session_state.current_page} / {total_pages} 페이지)")
 
-    # --- 4. 메인 표 (사용자 선택 컬럼만 표시) ---
-    # 사용자가 선택한 컬럼이 하나도 없으면 경고 방지용으로 티커는 보여줌
-    if not selected_cols:
-        selected_cols = ['티커']
+    # --- 4. 메인 표 (선택 기능 추가) ---
+    if not selected_cols: selected_cols = ['티커']
 
-    st.data_editor(
-        df_page[selected_cols],  # 🌟 여기서 선택한 컬럼만 잘라서 보여줍니다!
+    # 🌟 [핵심] on_select="rerun" 추가 -> 행을 누르면 앱이 다시 실행되며 선택된 값을 가져옴
+    event = st.data_editor(
+        df_page[selected_cols], 
         column_config={
             "티커": st.column_config.TextColumn("티커", disabled=True, width="small"),
             "url": st.column_config.LinkColumn("정보", help="이동", validate="^https://.*", max_chars=100, display_text="🔗", width="small"),
             "이름": st.column_config.TextColumn("종목명", disabled=True, width="small"),
             "국가": st.column_config.TextColumn("국가", width="small"),
-            "운용사": st.column_config.TextColumn("운용사", width="small"),
             "배당수": st.column_config.TextColumn("배당", width="small"),
             "내용": st.column_config.TextColumn("메모/내용", width="large"),
         },
         use_container_width=True, 
         hide_index=True, 
         key="main_editor",
-        on_change=handle_editor_change
+        on_change=handle_editor_change,
+        selection_mode="single-row", # 한 번에 한 줄만 선택
+        on_select="rerun" # 선택 시 즉시 반응
     )
+
+    # --- 🌟 [신규 기능] 선택된 종목 상세 보기 (메모장) ---
+    # 사용자가 행을 선택했을 때만 아래 내용이 뜹니다.
+    if len(event.selection["rows"]) > 0:
+        selected_idx = event.selection["rows"][0]
+        selected_row = df_page.iloc[selected_idx]
+        
+        st.info(f"📌 **[{selected_row['티커']}] {selected_row['이름']} 상세 메모**")
+        # 텍스트 영역으로 크게 보여줌 (모바일에서 읽기 편함)
+        st.text_area("내용 전체 보기", value=selected_row['내용'], height=150, disabled=True)
+        st.caption("※ 표 안에서 내용을 수정하면 여기에도 반영됩니다.")
 
     # --- 5. 페이지 버튼 ---
     st.markdown("---")
@@ -215,7 +211,7 @@ def main():
         with tab1:
             c_add, c_del = st.columns(2)
             with c_add:
-                st.caption("신규 종목 추가 (중복 시 빨간색 경고)")
+                st.caption("신규 종목 추가")
                 new_sym = st.text_input("티커 입력").upper()
                 new_name = st.text_input("종목명 입력")
                 new_country = st.selectbox("국가", ["미국", "한국"])
