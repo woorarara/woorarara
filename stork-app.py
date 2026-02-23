@@ -11,8 +11,7 @@ import plotly.express as px
 # ========================================================
 st.set_page_config(page_title="나만의 주식 스크리너 🚀", layout="wide")
 
-BASE_FOLDER = r"C:\Users\cjswo\Desktop\Stock_Data - 복사본"
-DB_FILE = os.path.join(BASE_FOLDER, "Stock_Master.db")
+DB_FILE = "Stock_Master.db"
 
 # ========================================================
 # 🧠 2. 상태 저장소(Session State) 초기화 세팅
@@ -225,4 +224,5 @@ if not filtered_df.empty:
             else:
                 st.warning(f"😢 야후 파이낸스에 {selected_corp}의 재무 차트 데이터가 없습니다.")
 else:
+
     st.info("검색 조건에 맞는 종목이 없습니다.")
