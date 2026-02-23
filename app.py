@@ -1,228 +1,307 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
+import sqlite3
 import os
-import yfinance as yf
-import math
-import plotly.express as px
+import io
+from datetime import datetime
 
 # ========================================================
-# 🎨 1. 앱 기본 설정
+# [설정] 기본 세팅
 # ========================================================
-st.set_page_config(page_title="나만의 주식 스크리너 🚀", layout="wide")
+st.set_page_config(page_title="ETF 정복(김도현)", page_icon="🦅", layout="wide")
 
-BASE_FOLDER = r"C:\Users\cjswo\Desktop\Stock_Data - 복사본"
-DB_FILE = os.path.join(BASE_FOLDER, "Stock_Master.db")
+def get_fragment_decorator():
+    if hasattr(st, "fragment"):
+        return st.fragment
+    elif hasattr(st, "experimental_fragment"):
+        return st.experimental_fragment
+    return lambda f: f
+
+run_in_fragment = get_fragment_decorator()
+
+DB_PATH = "stocks.db" if os.path.exists("stocks.db") else os.path.join(os.path.expanduser("~"), "Desktop", "Stock_Data", "stocks.db")
+
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 1
+
+# [되돌리기 기억 장치]
+if 'undo_history' not in st.session_state:
+    st.session_state.undo_history = []
 
 # ========================================================
-# 🧠 2. 상태 저장소(Session State) 초기화 세팅
-# (초기화 버튼을 위해 슬라이더와 검색창의 기억 공간을 만듭니다)
+# [DB 함수]
 # ========================================================
-if 'page' not in st.session_state: st.session_state.page = 1
-if 'search_keyword' not in st.session_state: st.session_state.search_keyword = ""
-if 'min_div' not in st.session_state: st.session_state.min_div = 0.0
-if 'max_per' not in st.session_state: st.session_state.max_per = 200.0
-if 'max_pbr' not in st.session_state: st.session_state.max_pbr = 50.0
-if 'min_roe' not in st.session_state: st.session_state.min_roe = -50.0
-if 'max_psr' not in st.session_state: st.session_state.max_psr = 100.0
-
-# ========================================================
-# 💵 3. 실시간 환율 & 재무 데이터 불러오기
-# ========================================================
-@st.cache_data(ttl=3600)
-def get_exchange_rate():
+def load_data():
+    if not os.path.exists(DB_PATH): return pd.DataFrame()
+    conn = sqlite3.connect(DB_PATH)
     try:
-        rate = yf.Ticker("KRW=X").fast_info['lastPrice']
-        return round(rate, 2)
+        df = pd.read_sql("SELECT * FROM etf_data", conn)
     except:
-        return None
-
-@st.cache_data(show_spinner=False, ttl=86400)
-def get_financial_chart_data(ticker, market_choice, kr_market_type):
-    try:
-        if market_choice == "🇰🇷 한국 주식":
-            yf_ticker = f"{ticker}.KS" if kr_market_type == 'KOSPI' else f"{ticker}.KQ"
-        else:
-            yf_ticker = ticker
-            
-        stock = yf.Ticker(yf_ticker)
-        fin = stock.financials 
-        
-        if fin is None or fin.empty: return None
-            
-        def get_safe_row(df, possible_keys):
-            for k in possible_keys:
-                if k in df.index: return df.loc[k]
-            return pd.Series([0]*len(df.columns), index=df.columns)
-
-        rev = get_safe_row(fin, ['Total Revenue', 'Operating Revenue', 'Revenue'])
-        op = get_safe_row(fin, ['Operating Income', 'Operating Profit'])
-        ni = get_safe_row(fin, ['Net Income', 'Net Income Common Stockholders'])
-        
-        df_chart = pd.DataFrame({'매출액': rev, '영업이익': op, '당기순이익': ni})
-        df_chart = df_chart.sort_index(ascending=True)
-        df_chart.index = df_chart.index.strftime('%Y')
-        return df_chart.tail(5)
-    except:
-        return None
-
-# ========================================================
-# 💾 4. DB 데이터 불러오기
-# ========================================================
-@st.cache_data
-def load_data(market_choice):
-    conn = sqlite3.connect(DB_FILE)
-    if market_choice == "🇰🇷 한국 주식":
-        df = pd.read_sql("SELECT 티커, 기업명, 시장, 섹터, 시가총액, 배당수익률, 배당주기, ROE, PER, PBR, PSR FROM korea_master", conn)
-    else:
-        df = pd.read_sql("SELECT 티커, 기업명, 'US' as 시장, 섹터, 시가총액, 배당수익률, 배당주기, ROE, PER, PBR, PSR FROM usa_master", conn)
+        return pd.DataFrame()
     conn.close()
-
-    for col in ['ROE', 'PER', 'PBR', 'PSR', '배당수익률']:
-        df[col] = pd.to_numeric(df[col].replace(['-', '미확인'], pd.NA), errors='coerce')
     
-    df['섹터'] = df['섹터'].fillna('기타').replace('', '기타')
+    df['배당수_num'] = pd.to_numeric(df['배당수'], errors='coerce').fillna(0)
+    
+    df["url"] = df.apply(
+        lambda row: f"https://finance.yahoo.com/quote/{row['티커']}" if row['국가'] == "미국" 
+        else f"https://m.stock.naver.com/item/main.nhn?code={row['티커']}", 
+        axis=1
+    )
     return df
 
-# ========================================================
-# 🎛️ 5. 사이드바 (조종석) & 초기화 버튼
-# ========================================================
-st.sidebar.title("🚀 주식 스크리너")
-market = st.sidebar.radio("어느 시장을 볼까요?", ["🇰🇷 한국 주식", "🇺🇸 미국 주식"])
+def update_db(ticker, field, new_value):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    try:
+        cur.execute(f"UPDATE etf_data SET {field} = ? WHERE 티커 = ?", (new_value, ticker))
+        conn.commit()
+    except: pass
+    conn.close()
 
-# 나라가 바뀔 때 해당 나라의 섹터 기억 공간도 세팅해 줍니다.
-sector_key = f"sector_{market}"
-if sector_key not in st.session_state: st.session_state[sector_key] = []
-
-current_rate = get_exchange_rate()
-if current_rate:
-    st.sidebar.metric(label="🇺🇸 실시간 환율 (USD/KRW)", value=f"{current_rate:,.2f} 원")
-
-st.sidebar.markdown("---")
-df = load_data(market)
-
-# 💡 대망의 [초기화 버튼]
-if st.sidebar.button("🔄 검색 및 필터 초기화 (전체 보기)", use_container_width=True):
-    st.session_state.search_keyword = ""
-    st.session_state[sector_key] = []
-    st.session_state.min_div = 0.0
-    st.session_state.max_per = 200.0
-    st.session_state.max_pbr = 50.0
-    st.session_state.min_roe = -50.0
-    st.session_state.max_psr = 100.0
-    st.session_state.page = 1
-    st.rerun() # 앱을 즉시 새로고침해서 비워버림
-
-st.sidebar.subheader("🔍 상세 검색")
-search_keyword = st.sidebar.text_input("티커 또는 기업명 검색", placeholder="예: 삼성전자, AAPL...", key="search_keyword")
-
-all_sectors = sorted(df['섹터'].astype(str).unique().tolist())
-selected_sectors = st.sidebar.multiselect("섹터(업종) 선택", options=all_sectors, key=sector_key)
-
-st.sidebar.subheader("💰 재무 필터 (슬라이더)")
-# 💡 슬라이더들이 session_state의 값을 바라보도록 key를 연결합니다.
-min_div = st.sidebar.slider("최소 배당수익률 (%)", 0.0, 15.0, step=0.5, key="min_div")
-max_per = st.sidebar.slider("최대 PER (수익대비 저평가)", 0.0, 200.0, step=1.0, key="max_per")
-max_pbr = st.sidebar.slider("최대 PBR (자산대비 저평가)", 0.0, 50.0, step=0.5, key="max_pbr")
-min_roe = st.sidebar.slider("최소 ROE (자본 수익성, %)", -50.0, 100.0, step=1.0, key="min_roe")
-max_psr = st.sidebar.slider("최대 PSR (매출대비 저평가)", 0.0, 100.0, step=0.5, key="max_psr")
-
-# ========================================================
-# 🧠 6. 지능형 필터링 엔진 (빈칸 무시 기술)
-# ========================================================
-filtered_df = df.copy()
-
-if search_keyword:
-    filtered_df = filtered_df[
-        filtered_df['티커'].str.contains(search_keyword, case=False, na=False) |
-        filtered_df['기업명'].str.contains(search_keyword, case=False, na=False)
-    ]
-
-if selected_sectors:
-    filtered_df = filtered_df[filtered_df['섹터'].isin(selected_sectors)]
-
-# 💡 슬라이더가 최대/최소 끝에 있을 때는 아예 필터링을 하지 않음!
-# (이렇게 해야 지표가 아예 없는 '우선주'나 '적자기업'도 필터 해제 시 화면에 뜹니다)
-if min_div > 0.0: filtered_df = filtered_df[filtered_df['배당수익률'] >= min_div]
-if max_per < 200.0: filtered_df = filtered_df[filtered_df['PER'] <= max_per]
-if max_pbr < 50.0: filtered_df = filtered_df[filtered_df['PBR'] <= max_pbr]
-if min_roe > -50.0: filtered_df = filtered_df[filtered_df['ROE'] >= min_roe]
-if max_psr < 100.0: filtered_df = filtered_df[filtered_df['PSR'] <= max_psr]
-
-# ========================================================
-# 🧮 7. 100개 자르기 & 페이지 번호 계산
-# ========================================================
-ITEMS_PER_PAGE = 100
-total_items = len(filtered_df)
-total_pages = math.ceil(total_items / ITEMS_PER_PAGE) if total_items > 0 else 1
-
-if st.session_state.page > total_pages: st.session_state.page = total_pages
-if st.session_state.page < 1: st.session_state.page = 1
-
-start_idx = (st.session_state.page - 1) * ITEMS_PER_PAGE
-end_idx = start_idx + ITEMS_PER_PAGE
-
-display_df = filtered_df.iloc[start_idx:end_idx]
-display_df = display_df.drop(columns=['시장']) if '시장' in display_df.columns else display_df
-
-# ========================================================
-# 🖥️ 8. 메인 화면 (데이터 표 & 페이지 버튼)
-# ========================================================
-st.title(f"{market} 검색 결과")
-st.markdown(f"**🎯 검색 결과:** 총 `{total_items}`개 종목 (페이지 {st.session_state.page} / {total_pages})")
-
-cap_format = "{:,.0f} 원" if market == "🇰🇷 한국 주식" else "$ {:,.0f}"
-
-st.dataframe(
-    display_df.style.format({
-        "배당수익률": "{:.2f}%", "ROE": "{:.2f}%", "PER": "{:.2f}",
-        "PBR": "{:.2f}", "PSR": "{:.2f}", "시가총액": cap_format
-    }),
-    use_container_width=True, height=400
-)
-
-cols = st.columns([1, 1, 2, 1, 1])
-with cols[0]:
-    if st.button("⏪ 처음으로"): st.session_state.page = 1
-with cols[1]:
-    if st.button("◀ 이전") and st.session_state.page > 1: st.session_state.page -= 1
-with cols[2]:
-    st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>{st.session_state.page} / {total_pages} Page</b></div>", unsafe_allow_html=True)
-with cols[3]:
-    if st.button("다음 ▶") and st.session_state.page < total_pages: st.session_state.page += 1
-with cols[4]:
-    if st.button("마지막 ⏩"): st.session_state.page = total_pages
-
-# ========================================================
-# 📊 9. 실시간 재무 차트 (Plotly 가로 정렬 적용)
-# ========================================================
-st.markdown("---")
-st.subheader("📊 개별 종목 실적 분석 (최대 5년)")
-
-if not filtered_df.empty:
-    selected_corp = st.selectbox("실적을 확인할 기업을 선택하세요:", filtered_df['기업명'].tolist())
+def add_ticker(ticker, name, country, manager):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT count(*) FROM etf_data WHERE 티커 = ?", (ticker,))
+    if cur.fetchone()[0] > 0:
+        conn.close()
+        return False, f"❌ '{ticker}'는 이미 DB에 있습니다!"
     
-    if selected_corp:
-        corp_data = filtered_df[filtered_df['기업명'] == selected_corp].iloc[0]
-        selected_ticker = corp_data['티커']
-        kr_market_type = corp_data.get('시장', 'US')
+    try:
+        cur.execute("INSERT INTO etf_data (티커, 이름, 국가, 운용사, 내용, 배당수) VALUES (?, ?, ?, ?, '', '0')",
+                    (ticker, name, country, manager))
+        conn.commit()
+        conn.close()
+        return True, f"✅ {ticker} 추가 완료!"
+    except Exception as e:
+        conn.close()
+        return False, f"오류: {e}"
+
+def delete_ticker(ticker):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM etf_data WHERE 티커 = ?", (ticker,))
+        conn.commit()
+    except: pass
+    conn.close()
+
+def handle_editor_change():
+    changes = st.session_state["main_editor"]["edited_rows"]
+    if changes:
+        df_page = st.session_state["df_page_static"]
+        for row_idx, updated_cols in changes.items():
+            ticker = df_page.iloc[row_idx]["티커"]
+            for col_name, new_val in updated_cols.items():
+                old_val = df_page.iloc[row_idx][col_name]
+                if pd.isna(old_val): old_val = ""
+                
+                st.session_state.undo_history.append({
+                    'ticker': ticker,
+                    'col_name': col_name,
+                    'old_val': old_val
+                })
+                
+                update_db(ticker, col_name, new_val)
+        st.toast("✅ 저장 완료!", icon="💾")
+
+def undo_last_change():
+    if st.session_state.undo_history:
+        last_action = st.session_state.undo_history.pop()
+        update_db(last_action['ticker'], last_action['col_name'], last_action['old_val'])
+        st.toast("↩️ 직전 수정 상태로 되돌렸습니다!", icon="⏪")
+    else:
+        st.warning("더 이상 되돌릴 내역이 없습니다.")
+
+# ========================================================
+# [표 프래그먼트]
+# ========================================================
+@run_in_fragment
+def render_data_editor(df_page, selected_cols):
+    st.data_editor(
+        df_page[selected_cols], 
+        column_config={
+            "티커": st.column_config.TextColumn("티커", disabled=True, width="small"),
+            "url": st.column_config.LinkColumn("정보", help="이동", validate="^https://.*", max_chars=100, display_text="🔗", width="small"),
+            "이름": st.column_config.TextColumn("종목명", disabled=True, width="small"),
+            "국가": st.column_config.TextColumn("국가", width="small"),
+            "배당수": st.column_config.TextColumn("배당", width="small"),
+            "내용": st.column_config.TextColumn("메모/내용", width="large"),
+        },
+        use_container_width=True, 
+        hide_index=True, 
+        key="main_editor",
+        on_change=handle_editor_change
+    )
+
+# ========================================================
+# [메인 화면]
+# ========================================================
+def main():
+    st.title("🦅 ETF 정복(김도현)")
+
+    df_raw = load_data()
+    if df_raw.empty:
+        st.error("DB 파일을 찾을 수 없습니다.")
+        return
+
+    # --- 1. 상단 검색창 ---
+    with st.expander("🔍 종목 검색 및 화면 설정 (클릭해서 열기/닫기)"):
+        st.write("👁️ **표시할 항목 선택 (체크 해제하면 숨겨집니다)**")
+        all_columns = ['티커', 'url', '이름', '국가', '운용사', '배당수', '내용']
+        default_columns = ['티커', 'url', '이름', '국가', '배당수', '내용']
+        selected_cols = st.multiselect("컬럼 선택", options=all_columns, default=default_columns, label_visibility="collapsed")
         
-        with st.spinner(f"📡 야후에서 {selected_corp}의 실적을 가져오는 중..."):
-            chart_data = get_financial_chart_data(selected_ticker, market, kr_market_type)
-            
-            if chart_data is not None and not chart_data.empty:
-                unit = "원" if market == "🇰🇷 한국 주식" else "달러 (USD)"
-                st.markdown(f"**{selected_corp} ({selected_ticker})**의 핵심 실적 (단위: {unit})")
+        st.markdown("---")
+        c1, c2 = st.columns(2)
+        with c1:
+            country_options = ["전체", "미국", "한국"]
+            selected_countries = st.multiselect("국가 선택", options=country_options, default=["전체"])
+            search_ticker = st.text_input("🎯 티커 검색", placeholder="예: TSLA").strip().upper()
+        
+        with c2:
+            search_kw = st.text_input("📝 키워드 검색", placeholder="이름/내용 등")
+            st.write("💰 배당 횟수 (연)")
+            max_val = int(df_raw['배당수_num'].max()) if not df_raw.empty else 12
+            n1, n2 = st.columns(2)
+            with n1:
+                min_div = st.number_input("최소", min_value=0, max_value=max_val, value=0, step=1)
+            with n2:
+                max_div = st.number_input("최대", min_value=0, max_value=max_val, value=max_val, step=1)
+        
+        if st.button("🔄 검색 조건 초기화", use_container_width=True):
+            st.session_state.current_page = 1
+            st.rerun()
+
+    # --- 2. 데이터 필터링 ---
+    df = df_raw.copy()
+    if "전체" not in selected_countries and selected_countries:
+        df = df[df['국가'].isin(selected_countries)]
+    if search_ticker:
+        df = df[df['티커'].str.contains(search_ticker, case=False, na=False)]
+    if search_kw:
+        kw = search_kw.upper()
+        mask = (df['이름'].str.contains(kw, case=False, na=False)) | \
+               (df['운용사'].str.contains(kw, case=False, na=False)) | \
+               (df['내용'].str.contains(kw, case=False, na=False))
+        df = df[mask]
+    df = df[(df['배당수_num'] >= min_div) & (df['배당수_num'] <= max_div)]
+
+    # --- 3. 페이징 ---
+    items_per_page = 30 
+    total_items = len(df)
+    total_pages = max(1, (total_items // items_per_page) + (1 if total_items % items_per_page > 0 else 0))
+    if st.session_state.current_page > total_pages: st.session_state.current_page = 1
+
+    start_idx = (st.session_state.current_page - 1) * items_per_page
+    df_page = df.iloc[start_idx : start_idx + items_per_page].reset_index(drop=True)
+    st.session_state["df_page_static"] = df_page
+
+    c_info, c_undo = st.columns([7, 3])
+    with c_info:
+        st.write(f"📊 조회된 종목: **{total_items}**개 (현재 {st.session_state.current_page} / {total_pages} 페이지)")
+    with c_undo:
+        if st.button("↩️ 방금 수정 되돌리기", use_container_width=True):
+            undo_last_change()
+            st.rerun()
+
+    # --- 모바일용 상세 보기 ---
+    selected_ticker_for_view = st.selectbox(
+        "📌 상세 내용을 확인할 종목을 선택하세요:", 
+        options=["(선택안함)"] + df_page['티커'].tolist()
+    )
+
+    if selected_ticker_for_view != "(선택안함)":
+        row_data = df_page[df_page['티커'] == selected_ticker_for_view].iloc[0]
+        st.info(f"📝 **[{row_data['티커']}] {row_data['이름']}** 상세 메모")
+        st.text_area("내용 (수정은 아래 표에서)", value=row_data['내용'], height=150, disabled=True)
+
+    # --- 4. 메인 표 출력 ---
+    if not selected_cols: selected_cols = ['티커']
+    
+    render_data_editor(df_page, selected_cols)
+
+    # --- 🌟 5. 페이지 버튼 (처음/끝 추가됨) ---
+    st.markdown("---")
+    
+    # 컬럼을 5개로 나누어 버튼을 배치합니다. (비율: 처음, 이전, 숫자, 다음, 끝)
+    c_first, c_prev, c_num, c_next, c_last = st.columns([1, 1, 3, 1, 1])
+    
+    with c_first:
+        if st.session_state.current_page > 1:
+            if st.button("⏪ 처음", use_container_width=True):
+                st.session_state.current_page = 1
+                st.rerun()
                 
-                fig = px.bar(chart_data, barmode='group')
-                fig.update_xaxes(tickangle=0) 
-                fig.update_layout(
-                    xaxis_title="", yaxis_title=f"금액 ({unit})",
-                    legend_title_text="실적 지표", margin=dict(t=20, b=20)
-                )
+    with c_prev:
+        if st.session_state.current_page > 1:
+            if st.button("◀ 이전", use_container_width=True):
+                st.session_state.current_page -= 1
+                st.rerun()
                 
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning(f"😢 야후 파이낸스에 {selected_corp}의 재무 차트 데이터가 없습니다.")
-else:
-    st.info("검색 조건에 맞는 종목이 없습니다.")
+    with c_num:
+        p_start = max(1, st.session_state.current_page - 1)
+        p_end = min(total_pages, p_start + 2)
+        p_cols = st.columns(len(range(p_start, p_end + 1)))
+        for idx, p in enumerate(range(p_start, p_end + 1)):
+            if p_cols[idx].button(f"{p}", type="primary" if p == st.session_state.current_page else "secondary", use_container_width=True):
+                st.session_state.current_page = p
+                st.rerun()
+                
+    with c_next:
+        if st.session_state.current_page < total_pages:
+            if st.button("다음 ▶", use_container_width=True):
+                st.session_state.current_page += 1
+                st.rerun()
+                
+    with c_last:
+        if st.session_state.current_page < total_pages:
+            if st.button("끝 ⏩", use_container_width=True):
+                st.session_state.current_page = total_pages
+                st.rerun()
+
+    # --- 6. 관리 및 다운로드 ---
+    st.markdown("---")
+    with st.expander("🛠️ 데이터 관리 도구 (추가/삭제/다운로드)"):
+        tab1, tab2 = st.tabs(["➕ 종목 추가/삭제", "📥 엑셀 다운로드"])
+        
+        with tab1:
+            c_add, c_del = st.columns(2)
+            with c_add:
+                st.caption("신규 종목 추가")
+                new_sym = st.text_input("티커 입력").upper()
+                new_name = st.text_input("종목명 입력")
+                new_country = st.selectbox("국가", ["미국", "한국"])
+                
+                if st.button("DB에 추가하기"):
+                    if new_sym: 
+                        success, msg = add_ticker(new_sym, new_name, new_country, "")
+                        if success:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+            with c_del:
+                st.caption("종목 삭제")
+                del_sym = st.text_input("삭제할 티커").upper()
+                if st.button("삭제하기", type="primary"):
+                    if del_sym:
+                        delete_ticker(del_sym)
+                        st.warning(f"{del_sym} 삭제됨!")
+                        st.rerun()
+
+        with tab2:
+            st.caption("데이터 엑셀 다운로드")
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                df_raw.drop(columns=['url', '배당수_num'], errors='ignore').to_excel(writer, index=False)
+            st.download_button(
+                label="📥 엑셀 파일 다운로드 (클릭)",
+                data=buffer.getvalue(),
+                file_name=f"Stock_DB_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+if __name__ == "__main__":
+    main()
